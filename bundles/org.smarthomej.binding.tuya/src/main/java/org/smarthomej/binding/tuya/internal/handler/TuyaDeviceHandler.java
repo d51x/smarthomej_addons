@@ -89,7 +89,7 @@ public class TuyaDeviceHandler extends BaseThingHandler implements DeviceInfoSub
 
     private @Nullable ScheduledFuture<?> reconnectFuture;
     private @Nullable ScheduledFuture<?> pollingJob;
-
+    private @Nullable ScheduledFuture<?> irLearnJob;
     private boolean disposing = false;
 
     private final Map<Integer, String> dpToChannelId = new HashMap<>();
@@ -177,7 +177,7 @@ public class TuyaDeviceHandler extends BaseThingHandler implements DeviceInfoSub
                     String decoded = convertBase64Code(configuration, (String) value);
                     logger.warn("ir code: {}", decoded);
                     updateState(channelId, new StringType(decoded));
-                    repeatStudyCode();
+                    irStartLearning(configuration.activeListen);
                 }
                 return;
             }
@@ -210,6 +210,16 @@ public class TuyaDeviceHandler extends BaseThingHandler implements DeviceInfoSub
                 pollingJob = scheduler.scheduleWithFixedDelay(tuyaDevice::refreshStatus, pollingInterval,
                         pollingInterval, TimeUnit.SECONDS);
             }
+
+            // start learning code if thing is online and presents 'ir-code' channel
+            this.getThing().getChannels().stream()
+                    .filter(channel -> CHANNEL_TYPE_UID_IR_CODE.equals(channel.getChannelTypeUID())).findFirst()
+                    .ifPresent(channel -> {
+                        ChannelConfiguration config = channelIdToConfiguration.get(channel.getChannelTypeUID());
+                        if (config != null) {
+                            irStartLearning(config.activeListen);
+                        }
+                    });
         } else {
             updateStatus(ThingStatus.OFFLINE);
             ScheduledFuture<?> pollingJob = this.pollingJob;
@@ -224,6 +234,7 @@ public class TuyaDeviceHandler extends BaseThingHandler implements DeviceInfoSub
             if (tuyaDevice != null && !disposing && (reconnectFuture == null || reconnectFuture.isDone())) {
                 this.reconnectFuture = scheduler.schedule(tuyaDevice::connect, 5000, TimeUnit.MILLISECONDS);
             }
+            irStopLearning();
         }
     }
 
@@ -332,6 +343,7 @@ public class TuyaDeviceHandler extends BaseThingHandler implements DeviceInfoSub
                     commandRequest.put(1, "study_key");
                     commandRequest.put(7, base64Code);
                 }
+                irStopLearning();
             }
         }
 
@@ -342,9 +354,7 @@ public class TuyaDeviceHandler extends BaseThingHandler implements DeviceInfoSub
 
         if (CHANNEL_TYPE_UID_IR_CODE.equals(channelTypeUID)) {
             if (command instanceof StringType) {
-                if (Boolean.TRUE.equals(configuration.activeListen)) {
-                    repeatStudyCode();
-                }
+                irStartLearning(configuration.activeListen);
             }
         }
     }
@@ -369,6 +379,7 @@ public class TuyaDeviceHandler extends BaseThingHandler implements DeviceInfoSub
             tuyaDevice.dispose();
             this.tuyaDevice = null;
         }
+        irStopLearning();
     }
 
     @Override
@@ -529,6 +540,9 @@ public class TuyaDeviceHandler extends BaseThingHandler implements DeviceInfoSub
                     .requireNonNull(dp2ToChannelId.computeIfAbsent(configuration.dp2, ArrayList::new));
             list.add(channelId);
         }
+        if (CHANNEL_TYPE_UID_IR_CODE.equals(channelTypeUID)) {
+            irStartLearning(configuration.activeListen);
+        }
     }
 
     private List<CommandOption> toCommandOptionList(List<String> options) {
@@ -598,6 +612,23 @@ public class TuyaDeviceHandler extends BaseThingHandler implements DeviceInfoSub
         TuyaDevice tuyaDevice = this.tuyaDevice;
         if (!commandRequest.isEmpty() && tuyaDevice != null) {
             tuyaDevice.set(commandRequest);
+        }
+    }
+
+    private void irStopLearning() {
+        logger.warn("stop ir learning");
+        ScheduledFuture<?> feature = irLearnJob;
+        if (feature != null) {
+            feature.cancel(true);
+            this.irLearnJob = null;
+        }
+    }
+
+    private void irStartLearning(Boolean available) {
+        irStopLearning();
+        if (available) {
+            logger.warn("start ir learning");
+            irLearnJob = scheduler.scheduleWithFixedDelay(this::repeatStudyCode, 200, 29000, TimeUnit.MILLISECONDS);
         }
     }
 }

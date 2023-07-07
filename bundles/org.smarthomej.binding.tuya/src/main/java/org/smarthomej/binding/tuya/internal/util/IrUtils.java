@@ -66,6 +66,11 @@ public class IrUtils {
             int word = ((raw_bytes[i] & 0xFF) + (raw_bytes[i + 1] & 0xFF) * 256) & 0xFFFF;
             pulses.add(word);
             i += 2;
+
+            // dirty hack because key not aligned by 4 byte ?
+            if (i >= raw_bytes.length) {
+                break;
+            }
         }
         return pulses;
     }
@@ -189,7 +194,10 @@ public class IrUtils {
     private static List<String> pulsesToNec(ArrayList<Integer> pulses) {
         List<String> ret = new ArrayList<>();
         ArrayList<Long> res = pulsesToWidthEncoded(pulses, 9000, null, null, 1125);
-
+        if (res == null) {
+            logger.warn("No ir key-code detected");
+            return null;
+        }
         for (Long code : res) {
             long addr = mirrorBits((code >> 24) & 0xFF, 8);
             long addr_not = mirrorBits((code >> 16) & 0xFF, 8);
